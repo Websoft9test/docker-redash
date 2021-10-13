@@ -1,112 +1,65 @@
-# this file from docker-compose.workspace, delete mail-server
-# default MySQL root password is 123456
-
-
-version: '3.8'
+# This configuration file is for the **development** setup.
+# For a production example please refer to getredash/setup repository on GitHub.
+version: "2.2"
+x-redash-service: &redash-service
+  build:
+    context: .
+    args:
+      skip_frontend_build: "true"
+  volumes:
+    - .:/app
+x-redash-environment: &redash-environment
+  REDASH_LOG_LEVEL: "INFO"
+  REDASH_REDIS_URL: "redis://redis:6379/0"
+  REDASH_DATABASE_URL: "postgresql://postgres@postgres/postgres"
+  REDASH_RATELIMIT_ENABLED: "false"
+  REDASH_MAIL_DEFAULT_SENDER: "redash@example.com"
+  REDASH_MAIL_SERVER: "email"
+  REDASH_ENFORCE_CSRF: "true"
 services:
-  onlyoffice-mysql-server:
-    container_name: ${APP_CONTAINER_NAME}-mysql
-    image: mysql:${DB_MYSQL_VERSION}
-    environment:
-     - MYSQL_ROOT_PASSWORD=${DB_MYSQL_PASSWORD}
-    stdin_open: true
-    user: root
-    tty: true
-    restart: always
-    volumes:
-     - ${VOLUMES_PATH_PREFIX}/config/mysql/conf.d:/etc/mysql/conf.d
-     - ${VOLUMES_PATH_PREFIX}/config/mysql/docker-entrypoint-initdb.d:/docker-entrypoint-initdb.d
-     - ${VOLUMES_PATH_PREFIX}/mysql_data:/var/lib/mysql
-     
-  onlyoffice-community-server:
-    container_name: ${APP_CONTAINER_NAME}
-    image: onlyoffice/communityserver:11.0.0.1458
+  server:
+    <<: *redash-service
+    command: dev_server
     depends_on:
-     - onlyoffice-mysql-server
-     - onlyoffice-document-server
-    environment:
-     - ONLYOFFICE_CORE_MACHINEKEY=core_secret
-     - CONTROL_PANEL_PORT_80_TCP=80
-     - CONTROL_PANEL_PORT_80_TCP_ADDR=onlyoffice-control-panel
-     - DOCUMENT_SERVER_PORT_80_TCP_ADDR=onlyoffice-document-server
-     - DOCUMENT_SERVER_JWT_ENABLED=true
-     - DOCUMENT_SERVER_JWT_SECRET=jwt_secret
-     - DOCUMENT_SERVER_JWT_HEADER=AuthorizationJwt
-     - MYSQL_SERVER_ROOT_PASSWORD=123456
-     - MYSQL_SERVER_DB_NAME=onlyoffice
-     - MYSQL_SERVER_HOST=onlyoffice-mysql-server
-     - MYSQL_SERVER_USER=onlyoffice
-     - MYSQL_SERVER_PASS=123456
+      - postgres
+      - redis
     ports:
-     - '${APP_PORT}:80'
-     - '443'
-     - '5222:5222'
-    stdin_open: true
-    tty: true
-    restart: always
-    privileged: true
-    volumes:
-     - ${VOLUMES_PATH_PREFIX}/community_data:/var/www/onlyoffice/Data
-     - ${VOLUMES_PATH_PREFIX}/community_log:/var/log/onlyoffice
-     - ${VOLUMES_PATH_PREFIX}/community_letsencrypt:/etc/letsencrypt
-     - ${VOLUMES_PATH_PREFIX}/document_data:/var/www/onlyoffice/DocumentServerData
-     - /sys/fs/cgroup:/sys/fs/cgroup:ro
-     - ${VOLUMES_PATH_PREFIX}/certs:/var/www/onlyoffice/Data/certs
-     
-  onlyoffice-document-server:
-    container_name:  ${APP_CONTAINER_NAME}-document-server
-    image: onlyoffice/documentserver:6.0.2
-    stdin_open: true
-    tty: true
-    restart: always
+      - "5000:5000"
+      - "5678:5678"
     environment:
-     - JWT_ENABLED=true
-     - JWT_SECRET=jwt_secret
-     - JWT_HEADER=AuthorizationJwt
-    ports:
-     - '9002:80'
-    expose:
-      - '80'
-      - '443'
-    volumes:
-       - ${VOLUMES_PATH_PREFIX}/document_data:/var/www/onlyoffice/Data
-       - ${VOLUMES_PATH_PREFIX}/document_log:/var/log/onlyoffice
-       - ${VOLUMES_PATH_PREFIX}/document_fonts:/usr/share/fonts/truetype/custom
-       - .document_forgotten:/var/lib/onlyoffice/documentserver/App_Data/cache/files/forgotten
-
-  onlyoffice-control-panel:
-    container_name:  ${APP_CONTAINER_NAME}-control-panel
+      <<: *redash-environment
+      PYTHONUNBUFFERED: 0
+  scheduler:
+    <<: *redash-service
+    command: dev_scheduler
     depends_on:
-     - onlyoffice-document-server
-     - onlyoffice-community-server
-    image: onlyoffice/controlpanel:2.9.0.351
+      - server
     environment:
-     - ONLYOFFICE_CORE_MACHINEKEY=core_secret
-    expose:
-      - '80'
-      - '443'
-    restart: always
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-      - ${VOLUMES_PATH_PREFIX}/controlpanel_data:/var/www/onlyoffice/Data
-      - ${VOLUMES_PATH_PREFIX}/controlpanel_log:/var/log/onlyoffice
-    stdin_open: true
-    tty: true
-    
-networks:
-  default:
-      name: ${APP_NETWORK}
-    
-volumes:
-  document_data:
-    driver: local
-  document_log:
-    driver: local
-  document_forgotten:
-  community_mysql:
-  community_data:
-  community_log:
-  community_letsencrypt:
-  controlpanel_data:
-  controlpanel_log:
-  mysql_data:
+      <<: *redash-environment
+  worker:
+    <<: *redash-service
+    command: dev_worker
+    depends_on:
+      - server
+    environment:
+      <<: *redash-environment
+      PYTHONUNBUFFERED: 0
+  redis:
+    image: redis:3-alpine
+    restart: unless-stopped
+  postgres:
+    image: postgres:9.5-alpine
+    # The following turns the DB into less durable, but gains significant performance improvements for the tests run (x3
+    # improvement on my personal machine). We should consider moving this into a dedicated Docker Compose configuration for
+    # tests.
+    ports:
+      - "15432:5432"
+    command: "postgres -c fsync=off -c full_page_writes=off -c synchronous_commit=OFF"
+    restart: unless-stopped
+    environment:
+      POSTGRES_HOST_AUTH_METHOD: "trust"
+  email:
+    image: djfarrelly/maildev
+    ports:
+      - "1080:80"
+    restart: unless-stopped
