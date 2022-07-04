@@ -63,3 +63,8 @@ services:
     ports:
       - "1080:80"
     restart: unless-stopped
+
+networks:
+  default:
+    name: ${APP_NETWORK}
+    external: true
